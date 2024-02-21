@@ -1,0 +1,35 @@
+name: Main manual pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      Version:
+        description: 'Package version'
+        required: true
+        default: 3.0.0
+        type: number
+      ReleaseNum:
+        description: 'Release Num'
+        required: true
+        default: 1
+        type: number
+      Architecture:
+        description: 'Architecture'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+        - all
+        - arm64
+        - amd64
+      Depends:
+        description: 'Dependencies'
+        required: true
+        default: 'libc6'
+        type: string
+
+jobs:
+  build:
+    name: Build
+    uses: ./.github/workflows/build.yaml
+    secrets: inherit
