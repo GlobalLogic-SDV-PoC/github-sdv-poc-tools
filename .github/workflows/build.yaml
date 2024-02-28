@@ -15,6 +15,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
+      - name: setup awscli
+        ## Debian
+        #run: apt update && apt install python3 python3-pip -y && python3 -m pip --break-system-packages install awscli
+        # Ubuntu
+        run: apt update && apt install python3 python3-pip -y && python3 -m pip install awscli
+        ## CentOS
+        #run: dnf install -y python python-pip -y && python -m pip install awscli
+
+      - name: install minimal required software
+        ## Debian
+        #run: apt update && apt install -y gnupg sudo curl jq
+        # Ubuntu
+        run: apt update && apt install -y gnupg sudo curl jq
+        ## CentOS
+        #run: dnf install -y gnupg sudo curl jq
+
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -28,19 +44,19 @@ jobs:
       - name: Download files
         run: |
           aws s3 cp s3://${{ vars.APT_REPO_S3 }}/tools-src/src-tools.tar.gz .
-          mkdir -p ${{ vars.PACKAGE_NAME }}_${{ inputs.Version }}-${GITHUB_RUN_NUMBER}_${{ inputs.Architecture}}/opt/${{ vars.PACKAGE_DST }}
-          tar -xf src-tools.tar.gz -C ${{ vars.PACKAGE_NAME }}_${{ inputs.Version }}-${GITHUB_RUN_NUMBER}_${{ inputs.Architecture}}/opt/${{ vars.PACKAGE_DST }}
-          cd ${{ vars.PACKAGE_NAME }}_${{ inputs.Version }}-${GITHUB_RUN_NUMBER}_${{ inputs.Architecture}}/opt/${{ vars.PACKAGE_DST }}
+          mkdir -p astemo-tools_${{ inputs.Version }}_${GITHUB_RUN_NUMBER}_${{ inputs.Architecture}}/opt/tools
+          tar -xf src-tools.tar.gz -C astemo-tools_${{ inputs.Version }}_${GITHUB_RUN_NUMBER}_${{ inputs.Architecture}}/opt/tools
+          cd astemo-tools_${{ inputs.Version }}_${GITHUB_RUN_NUMBER}_${{ inputs.Architecture}}/opt/tools
           find . -name ".git" -o -name ".git*" | xargs -I{} rm -rf {}
           echo "SIZE=$(( $(du -sb . | awk '{print $1}') / 1024 ))" >> $GITHUB_ENV
 
       - name: Create control file
         shell: bash
         run: |
-          mkdir -p ${{ vars.PACKAGE_NAME }}_${{ inputs.Version }}-${GITHUB_RUN_NUMBER}_${{ inputs.Architecture}}/DEBIAN
-          echo "Package: ${{ vars.PACKAGE_NAME }}
-          Provides: ${{ vars.PACKAGE_NAME }} (= ${{ inputs.Version }})
-          Version: ${{ inputs.Version }}
+          mkdir -p astemo-tools_${{ inputs.Version }}_${GITHUB_RUN_NUMBER}_${{ inputs.Architecture}}/DEBIAN
+          echo "Package: astemo-tools
+          Provides: astemo-tools (= ${{ inputs.Version }})
+          Version: ${{ inputs.Version }}-${GITHUB_RUN_NUMBER}
           Maintainer: ${{ github.actor }} <ha@dropmail.cc>
           Depends: ${{ inputs.Depends }}
           Section: utils
@@ -48,12 +64,12 @@ jobs:
           Architecture: ${{ inputs.Architecture}}
           Homepage: https://www.hitachiastemo.com
           Installed-Size: ${{ env.SIZE }}
-          Description: Tools" > ${{ vars.PACKAGE_NAME }}_${{ inputs.Version }}-${GITHUB_RUN_NUMBER}_${{ inputs.Architecture}}/DEBIAN/control
-          cat ${{ vars.PACKAGE_NAME }}_${{ inputs.Version }}-${GITHUB_RUN_NUMBER}_${{ inputs.Architecture}}/DEBIAN/control
+          Description: Tools" > astemo-tools_${{ inputs.Version }}_${GITHUB_RUN_NUMBER}_${{ inputs.Architecture}}/DEBIAN/control
+          cat astemo-tools_${{ inputs.Version }}_${GITHUB_RUN_NUMBER}_${{ inputs.Architecture}}/DEBIAN/control
 
       - name: Build package
         run: |
-          dpkg --build ${{ vars.PACKAGE_NAME }}_${{ inputs.Version }}-${GITHUB_RUN_NUMBER}_${{ inputs.Architecture}}
+          dpkg --build astemo-tools_${{ inputs.Version }}_${GITHUB_RUN_NUMBER}_${{ inputs.Architecture}}
 
       - name: Install aptly
         run: |
@@ -65,7 +81,7 @@ jobs:
       - name: Check if repo used
         id: lockRepo
         run: |
-          while [ $(aws s3api list-objects-v2 --bucket ${{ vars.APT_REPO_S3 }} --query "contains(Contents[].Key, 'db/aptly-db.lock')") == true ]; do echo "File .lock exists" && sleep 15 ; done
+          while $(aws s3api list-objects-v2 --bucket ${{ vars.APT_REPO_S3 }} --query "contains(Contents[].Key, 'db/aptly-db.lock')"); do echo "File .lock exists" && sleep 15 ; done
 
       - name: Add package to aptly repo
         if: steps.lockRepo.outcome == 'success'
@@ -73,33 +89,34 @@ jobs:
         run: |
           touch aptly-db.lock
           aws s3 cp aptly-db.lock s3://${{ vars.APT_REPO_S3 }}/db/aptly-db.lock
-          if ! aws s3api list-objects-v2 --bucket ${{ vars.APT_REPO_S3 }} --query "contains(Contents[].Key, '/db/aptly-db.tar')"
+          if aws s3 ls ${{ vars.APT_REPO_S3 }}/db/aptly-db.tar
           then
-            aws s3 cp s3://${{ vars.APT_REPO_S3 }}/db/aptly-db.tar /home/runner/
-            tar -xzvf /home/runner/aptly-db.tar --directory /home/runner/
-            ls -lsa /home/runner/
-            # gpg --import --batch /home/runner/public.pgp
+            aws s3 cp s3://${{ vars.APT_REPO_S3 }}/db/aptly-db.tar ${HOME}/
+            tar -xzvf ${HOME}/aptly-db.tar --directory ${HOME}/
+            ls -lsa ${HOME}/
+            # gpg --import --batch ${HOME}/public.pgp
             # echo -n "$GPG_SECRET_KEY" | base64 --decode | gpg --import
-            APTLY_DIR='/home/runner/.aptly'
-            jq --arg aptly_dir "$APTLY_DIR" '.rootDir = $aptly_dir' "/home/runner/.aptly.conf" > tmp.conf && mv tmp.conf "/home/runner/.aptly.conf"
-            aptly repo add apt-repo ${{ vars.PACKAGE_NAME }}_${{ inputs.Version }}-${GITHUB_RUN_NUMBER}_${{ inputs.Architecture}}.deb
+            APTLY_DIR="${HOME}/.aptly"
+            jq --arg aptly_dir "$APTLY_DIR" '.rootDir = $aptly_dir' "${HOME}/.aptly.conf" > tmp.conf && mv tmp.conf "${HOME}/.aptly.conf"
+            aptly repo list
+            aptly repo add apt-repo astemo-tools_${{ inputs.Version }}_${GITHUB_RUN_NUMBER}_${{ inputs.Architecture}}.deb
             aptly publish update --batch=true --gpg-key=${{ secrets.GPG_KEY_ID }} --passphrase=${{ secrets.GPG_KEY_PASS }} stable s3:${{ vars.APT_REPO_S3 }}:
-            rm /home/runner/aptly-db.tar
+            rm ${HOME}/aptly-db.tar
           else
             aptly repo create apt-repo
-            aptly repo add apt-repo ${{ vars.PACKAGE_NAME }}_${{ inputs.Version }}-${GITHUB_RUN_NUMBER}_${{ inputs.Architecture}}.deb
-            S3_ENDPOINT='{"${{ vars.APT_REPO_S3 }}":{"region": "${{ vars.AWS_REGION }}", "bucket": "${{ vars.APT_REPO_S3 }}", "acl": "public-read"}}'
-            jq --argjson s3_endpoint "$S3_ENDPOINT" '.S3PublishEndpoints = $s3_endpoint' "/home/runner/.aptly.conf" > tmp.conf && mv tmp.conf /home/runner/.aptly.conf
+            aptly repo add apt-repo astemo-tools_${{ inputs.Version }}_${GITHUB_RUN_NUMBER}_${{ inputs.Architecture}}.deb
+            S3_ENDPOINT='{"${{ vars.APT_REPO_S3 }}":{"region": "${{ vars.AWS_REGION }}", "bucket": "${{ vars.APT_REPO_S3 }}", "acl": "private"}}'
+            jq --argjson s3_endpoint "$S3_ENDPOINT" '.S3PublishEndpoints = $s3_endpoint' "${HOME}/.aptly.conf" > tmp.conf && mv tmp.conf ${HOME}/.aptly.conf
             gpg --batch --passphrase '' --quick-gen-key USER_ID default default
-            aptly publish repo --architectures=all --batch=true --gpg-key=${{ secrets.GPG_KEY_ID }} --passphrase=${{ secrets.GPG_KEY_PASS }} --component=main --distribution=stable apt-repo s3:${{ vars.APT_REPO_S3 }}:
+            aptly publish repo --architectures=amd64,arm64,i386 --batch=true --gpg-key=${{ secrets.GPG_KEY_ID }} --passphrase=${{ secrets.GPG_KEY_PASS }} --component=main --distribution=stable apt-repo s3:${{ vars.APT_REPO_S3 }}:
           fi
         env:
           GPG_SECRET_KEY: ${{ secrets.GPG_SECRET_KEY }}
 
       - name: Push package db to repo
         run: |
-          tar -czvf /home/runner/aptly-db.tar --directory /home/runner/ .aptly/db .aptly.conf .gnupg
-          aws s3 cp /home/runner/aptly-db.tar s3://${{ vars.APT_REPO_S3 }}/db/aptly-db.tar
+          tar -czvf ${HOME}/aptly-db.tar --directory ${HOME}/ .aptly/db .aptly.conf .gnupg
+          aws s3 cp ${HOME}/aptly-db.tar s3://${{ vars.APT_REPO_S3 }}/db/aptly-db.tar
 
       - name: Remove .lock
         if: success() || failure()
